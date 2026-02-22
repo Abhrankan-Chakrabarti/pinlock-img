@@ -10,12 +10,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+
 # ----------------------------
 # Configuration
 # ----------------------------
 ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".ico"}
 PBKDF2_ITERATIONS = 200_000
-SALT = b"pinlock-img-v6"
+SALT = b"pinlock-img-v7"
 LOCK_SUFFIX = ".lock"
 
 
@@ -23,7 +24,6 @@ LOCK_SUFFIX = ".lock"
 # XOR Transform
 # ----------------------------
 def xor_transform(array: np.ndarray, seed: int) -> np.ndarray:
-    """Creates a deterministic XOR stream using a seeded PRNG."""
     rng = np.random.default_rng(seed)
     stream = rng.integers(0, 256, size=array.shape, dtype=array.dtype)
     return array ^ stream
@@ -62,16 +62,16 @@ def process_img(fp: Path, seed: int | None, dry_run: bool):
             print(f"🔍 [{state}] Would {action}: {fp.name}")
             return True, action
 
-        # Atomic Read
         with Image.open(fp) as img:
             img.load()
-            mode, fmt = img.mode, img.format
+            mode = img.mode
+            fmt = img.format or fp.suffix.replace(".", "").upper()
             original_array = np.asarray(img)
             palette = img.getpalette()
 
-        # Transform and Save to Temp
         transformed = xor_transform(original_array, seed)
         result = Image.fromarray(transformed, mode=mode)
+
         if mode == "P" and palette:
             result.putpalette(palette)
 
@@ -81,7 +81,6 @@ def process_img(fp: Path, seed: int | None, dry_run: bool):
         result.save(tmp_path, format=fmt)
         shutil.move(str(tmp_path), str(fp))
 
-        # Rename for visual state tracking
         new_path = remove_lock_suffix(fp) if locked else add_lock_suffix(fp)
         if new_path != fp:
             fp.rename(new_path)
@@ -98,47 +97,65 @@ def process_img(fp: Path, seed: int | None, dry_run: bool):
 # Main Entrance
 # ----------------------------
 def main():
-    # Input Handling
-    path_input = Path(sys.argv[1] if len(sys.argv) > 1 else input("Path: ").strip())
+    path_input = Path(
+        sys.argv[1] if len(sys.argv) > 1 else input("Path: ").strip()
+    )
+
     if not path_input.exists():
-        print("❌ Path does not exist."); return
+        print("❌ Path does not exist.")
+        return
 
     dry_run = input("Dry Run? (y/n): ").strip().lower() == "y"
     files = list(path_input.rglob("*")) if path_input.is_dir() else [path_input]
     seed = None
 
     if not dry_run:
-        # Smart Confirmation logic
-        encrypting_exists = any(f.suffix.lower() in ALLOWED_EXTS and not is_locked_file(f) for f in files)
+        encrypting_exists = any(
+            f.suffix.lower() in ALLOWED_EXTS and not is_locked_file(f)
+            for f in files
+        )
+
         pwd = getpass.getpass("Password: ")
         if not pwd:
-            print("❌ Password cannot be empty."); return
+            print("❌ Password cannot be empty.")
+            return
 
         if encrypting_exists:
             if getpass.getpass("Confirm Password: ") != pwd:
-                print("❌ Passwords do not match."); return
+                print("❌ Passwords do not match.")
+                return
 
-        # Hoisted Key Derivation (Run ONCE per session)
         print("⚙️  Deriving secure key (PBKDF2)...")
-        key = hashlib.pbkdf2_hmac("sha256", pwd.encode(), SALT, PBKDF2_ITERATIONS)
+        key = hashlib.pbkdf2_hmac(
+            "sha256",
+            pwd.encode(),
+            SALT,
+            PBKDF2_ITERATIONS
+        )
         seed = int.from_bytes(key[:8], "big")
 
-    # Processing and Reporting
-    enc_count, dec_count, total = 0, 0, 0
+    enc_count = 0
+    dec_count = 0
+    total = 0
+
     for f in files:
         if f.suffix.lower() in ALLOWED_EXTS:
             success, action = process_img(f, seed, dry_run)
             if success:
                 total += 1
-                if action == "Encrypt": enc_count += 1
-                else: dec_count += 1
+                if action == "Encrypt":
+                    enc_count += 1
+                elif action == "Decrypt":
+                    dec_count += 1
 
-    # Final Summary
-    print("\n" + "=" * 40 + "\n📊 Batch Summary\n" + "=" * 40)
+    print("\n" + "=" * 40)
+    print("📊 Batch Summary")
+    print("=" * 40)
     print(f"Total Files Handled : {total}")
     print(f"Encrypted           : {enc_count}")
     print(f"Decrypted           : {dec_count}")
-    print("=" * 40 + "\n✨ Done!\n")
+    print("=" * 40)
+    print("✨ Done!\n")
 
 
 if __name__ == "__main__":
