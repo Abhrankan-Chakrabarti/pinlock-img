@@ -2,22 +2,39 @@
 
 import sys
 import hashlib
+import hmac
 import getpass
 import shutil
 import tempfile
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, PngImagePlugin
 
 
 # ----------------------------
 # Configuration
 # ----------------------------
-ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".ico"}
+ALLOWED_EXTS = {".png"}  # Auth tag stored in PNG metadata safely
 PBKDF2_ITERATIONS = 200_000
-SALT = b"pinlock-img-v7"
+SALT = b"pinlock-img-v8"
 LOCK_SUFFIX = ".lock"
+AUTH_FIELD = "pinlock_auth"
+
+
+# ----------------------------
+# Key Derivation
+# ----------------------------
+def derive_keys(password: str):
+    key = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode(),
+        SALT,
+        PBKDF2_ITERATIONS
+    )
+    xor_seed = int.from_bytes(key[:16], "big")
+    auth_key = key[16:]
+    return xor_seed, auth_key
 
 
 # ----------------------------
@@ -30,29 +47,25 @@ def xor_transform(array: np.ndarray, seed: int) -> np.ndarray:
 
 
 # ----------------------------
-# Lock State Helpers
+# Lock Helpers
 # ----------------------------
 def is_locked_file(fp: Path) -> bool:
     return fp.stem.endswith(LOCK_SUFFIX)
 
 
 def add_lock_suffix(fp: Path) -> Path:
-    if is_locked_file(fp):
-        return fp
     return fp.with_name(fp.stem + LOCK_SUFFIX + fp.suffix)
 
 
 def remove_lock_suffix(fp: Path) -> Path:
-    if is_locked_file(fp):
-        new_stem = fp.stem[:-len(LOCK_SUFFIX)]
-        return fp.with_name(new_stem + fp.suffix)
-    return fp
+    new_stem = fp.stem[:-len(LOCK_SUFFIX)]
+    return fp.with_name(new_stem + fp.suffix)
 
 
 # ----------------------------
 # Image Processing
 # ----------------------------
-def process_img(fp: Path, seed: int | None, dry_run: bool):
+def process_img(fp: Path, xor_seed, auth_key, dry_run):
     try:
         locked = is_locked_file(fp)
         action = "Decrypt" if locked else "Encrypt"
@@ -65,25 +78,59 @@ def process_img(fp: Path, seed: int | None, dry_run: bool):
         with Image.open(fp) as img:
             img.load()
             mode = img.mode
-            fmt = img.format or fp.suffix.replace(".", "").upper()
             original_array = np.asarray(img)
-            palette = img.getpalette()
 
-        transformed = xor_transform(original_array, seed)
-        result = Image.fromarray(transformed, mode=mode)
+            # ------------------------
+            # DECRYPT
+            # ------------------------
+            if locked:
+                stored_tag = img.info.get(AUTH_FIELD)
+                if not stored_tag:
+                    print(f"❌ No authentication tag found: {fp.name}")
+                    return False, None
 
-        if mode == "P" and palette:
-            result.putpalette(palette)
+                expected_tag = hmac.new(
+                    auth_key,
+                    original_array.tobytes(),
+                    hashlib.sha256
+                ).hexdigest()
 
+                if not hmac.compare_digest(stored_tag, expected_tag):
+                    print(f"❌ Wrong password (authentication failed): {fp.name}")
+                    return False, None
+
+                transformed = xor_transform(original_array, xor_seed)
+                result = Image.fromarray(transformed, mode=mode)
+
+            # ------------------------
+            # ENCRYPT
+            # ------------------------
+            else:
+                transformed = xor_transform(original_array, xor_seed)
+                result = Image.fromarray(transformed, mode=mode)
+
+                tag = hmac.new(
+                    auth_key,
+                    transformed.tobytes(),
+                    hashlib.sha256
+                ).hexdigest()
+
+                meta = PngImagePlugin.PngInfo()
+                meta.add_text(AUTH_FIELD, tag)
+
+        # Atomic save
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
-        result.save(tmp_path, format=fmt)
+        if locked:
+            result.save(tmp_path, format="PNG")
+        else:
+            result.save(tmp_path, format="PNG", pnginfo=meta)
+
         shutil.move(str(tmp_path), str(fp))
 
         new_path = remove_lock_suffix(fp) if locked else add_lock_suffix(fp)
-        if new_path != fp:
-            fp.rename(new_path)
+        fp.rename(new_path)
 
         print(f"✅ {action}ed: {new_path.name}")
         return True, action
@@ -94,7 +141,7 @@ def process_img(fp: Path, seed: int | None, dry_run: bool):
 
 
 # ----------------------------
-# Main Entrance
+# Main
 # ----------------------------
 def main():
     path_input = Path(
@@ -106,14 +153,13 @@ def main():
         return
 
     dry_run = input("Dry Run? (y/n): ").strip().lower() == "y"
-    files = list(path_input.rglob("*")) if path_input.is_dir() else [path_input]
-    seed = None
+    files = list(path_input.rglob("*.png")) if path_input.is_dir() else [path_input]
+
+    xor_seed = None
+    auth_key = None
 
     if not dry_run:
-        encrypting_exists = any(
-            f.suffix.lower() in ALLOWED_EXTS and not is_locked_file(f)
-            for f in files
-        )
+        encrypting_exists = any(not is_locked_file(f) for f in files)
 
         pwd = getpass.getpass("Password: ")
         if not pwd:
@@ -125,14 +171,8 @@ def main():
                 print("❌ Passwords do not match.")
                 return
 
-        print("⚙️  Deriving secure key (PBKDF2)...")
-        key = hashlib.pbkdf2_hmac(
-            "sha256",
-            pwd.encode(),
-            SALT,
-            PBKDF2_ITERATIONS
-        )
-        seed = int.from_bytes(key[:8], "big")
+        print("⚙️  Deriving secure keys...")
+        xor_seed, auth_key = derive_keys(pwd)
 
     enc_count = 0
     dec_count = 0
@@ -140,7 +180,7 @@ def main():
 
     for f in files:
         if f.suffix.lower() in ALLOWED_EXTS:
-            success, action = process_img(f, seed, dry_run)
+            success, action = process_img(f, xor_seed, auth_key, dry_run)
             if success:
                 total += 1
                 if action == "Encrypt":
