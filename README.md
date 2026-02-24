@@ -1,70 +1,161 @@
-# pinlock-img (v9) - Authenticated PNG Vault
+# 🔐 pinlock-img (v9) – Authenticated PNG Vault
 
-A high-security, authenticated image encryption utility. Version 9 implements **Authenticated Encryption** via HMAC-SHA256, ensuring that your password is validated and data integrity is verified before any decryption occurs.
+A password-based image protection utility for PNG files.
+
+Version 9 introduces authenticated encryption behavior using an Encrypt-then-MAC design with HMAC-SHA256. Decryption is only performed after successful password verification, preventing silent corruption.
+
+> ⚠️ Note: This tool uses a deterministic XOR stream cipher for pixel transformation. While authentication is strong, this is not a replacement for modern AEAD cryptography such as AES-GCM.
+
+---
 
 ## 🚀 Key Features
 
-*   **Authenticated Encryption:** Unlike standard XOR tools, v9 verifies an HMAC tag stored in the PNG metadata. If the password is wrong or the file is tampered with, it aborts immediately.
-*   **Cryptographic Key Stretching:** Uses **PBKDF2-HMAC-SHA256** with **200,000 iterations** and a unique salt (`pinlock-img-v9`) to derive secure keys.
-*   **Dual-Key Derivation:** Generates two distinct keys from your password: one for the **XOR stream** (encryption) and one for the **HMAC** (authentication).
-*   **Atomic Operations:** Uses temporary files and `shutil.move` to ensure your original data is never corrupted during the process.
-*   **Batch Processing:** Recursive directory scanning to encrypt or decrypt entire libraries at once.
+### 🔐 Authenticated Encryption (Encrypt-then-MAC)
+
+Before decryption occurs, the script verifies an HMAC-SHA256 tag embedded inside the PNG metadata. If:
+
+* The password is incorrect, or
+* The file has been modified,
+
+The operation aborts safely without altering the file.
+
+---
+
+### 🧠 Secure Key Derivation
+
+Uses:
+
+* PBKDF2-HMAC-SHA256
+* 200,000 iterations
+* Salt: `pinlock-img-v9`
+
+This slows down brute-force attacks and derives cryptographically strong keys from user passwords.
+
+---
+
+### 🔑 Dual-Key Architecture
+
+A single 32-byte master key is derived and split into:
+
+* **XOR Seed (16 bytes)** → Seeds `numpy.random.default_rng()` to produce a deterministic noise stream.
+* **Authentication Key (16 bytes)** → Used for HMAC-SHA256 verification.
+
+This cleanly separates encryption and authentication responsibilities.
+
+---
+
+### 🛡️ Atomic File Operations
+
+All writes occur via temporary files followed by `shutil.move()` to prevent partial writes or corruption in case of interruption.
+
+---
+
+### 📂 Batch Processing
+
+Supports recursive directory scanning for processing entire PNG collections in one command.
 
 ---
 
 ## 🛠️ How It Works
 
-### 1. Key Derivation
-Your password is transformed into a 32-byte master key using PBKDF2. This key is split:
-*   **XOR Seed (16 bytes):** Seeds the `numpy.random.default_rng` to create a deterministic noise stream.
-*   **Auth Key (16 bytes):** Used to calculate and verify the HMAC-SHA256 tag.
+### 1️⃣ Key Derivation
 
-### 2. Encryption (Encrypt-then-MAC)
-The image pixels are XORed with the noise stream. An HMAC tag is then computed from the **encrypted** pixel data and stored in the PNG's `tEXt` chunk under the field `pinlock_auth`.
+```
+password → PBKDF2 → 32-byte master key
+```
 
-### 3. Decryption (Verify-then-Decrypt)
-Before transforming pixels, the script re-calculates the HMAC of the encrypted file and compares it to the stored tag. If they do not match, the script identifies a "Wrong Password" and stops, preventing the creation of corrupted images.
+Split into:
+
+* XOR Seed
+* HMAC Key
+
+---
+
+### 2️⃣ Encryption (Encrypt → MAC)
+
+1. Pixel data is XORed with a deterministic noise stream.
+2. An HMAC-SHA256 tag is computed from the encrypted pixel bytes.
+3. The tag is stored in the PNG `tEXt` chunk under:
+
+```
+pinlock_auth
+```
+
+---
+
+### 3️⃣ Decryption (Verify → Decrypt)
+
+1. The stored HMAC tag is retrieved.
+2. A new HMAC is computed from the encrypted data.
+3. If the tags match → decryption proceeds.
+4. If they do not match → the script aborts safely.
+
+This prevents:
+
+* Wrong-password corruption
+* Silent data damage
+* Undetected tampering
 
 ---
 
 ## 📦 Installation
 
-This utility requires **Python 3.8+** and two libraries:
+Requires **Python 3.8+**
+
+Install dependencies:
 
 ```bash
 pip install numpy Pillow
 ```
 
+---
+
 ## 📖 Usage
 
-> **Note:** v9 is strictly optimized for **PNG** files to ensure metadata and authentication integrity.
+> ⚠️ v9 supports **PNG files only** to ensure reliable metadata-based authentication.
 
-### Encrypt/Decrypt a Folder or File
-Run the script and provide the path to a single PNG or a directory:
+### Encrypt / Decrypt
+
 ```bash
-python pinlock-img.py /path/to/your/png_files
+python pinlock-img.py /path/to/png_or_directory
 ```
 
+The script automatically determines whether each file should be encrypted or decrypted based on the `.lock` suffix.
+
+---
+
 ### Dry Run (Audit Mode)
-See what would happen without modifying any files or entering a password:
+
+Preview operations without modifying any files:
+
 ```bash
-python pinlock-img.py /path/to/your/png_files
-# Enter 'y' at the Dry Run prompt:
+python pinlock-img.py /path/to/files
 Enable Dry Run? (y/n): y
 ```
 
-### Password Safety
-The script uses `getpass` to ensure your password is never visible on the screen or saved in your shell history. Confirmation is only required when encrypting new files to prevent typos.
+No password is required in dry run mode.
 
-```bash
-Password: 
-Confirm Password: 
+---
+
+### Password Handling
+
+* Password input uses `getpass`
+* Not echoed to terminal
+* Not stored in shell history
+* Confirmation required only when encrypting new files
+
+Example:
+
+```
+Password:
+Confirm Password:
 ```
 
-### Batch Summary & Output
-At the end of each session, the script provides a formatted summary of the operations performed.
+---
 
-```bash
+## 📊 Example Output
+
+```
 ✅ Encrypted: image1.lock.png
 ✅ Decrypted: secret_photo.png
 ❌ Wrong password (authentication failed): private.lock.png
@@ -79,6 +170,24 @@ Decrypted           : 1
 ✨ Done!
 ```
 
+---
+
+## 🔎 Security Notes
+
+* Authentication is strong (HMAC-SHA256).
+* Key stretching resists brute-force attacks.
+* Decryption will never overwrite data on password failure.
+
+However:
+
+* The encryption mechanism uses XOR with a deterministic PRNG.
+* This is suitable for controlled vault-style use, but not equivalent to modern cryptographic standards like AES-GCM.
+
+If higher-grade cryptographic guarantees are required, consider upgrading the transformation layer to an AEAD cipher.
+
+---
+
 ## 📜 License
 
-This project is licensed under the **MIT License**. See the [LICENSE](LICENSE) file for the full text.
+Licensed under the **MIT License**.
+See the `LICENSE` file for details.
