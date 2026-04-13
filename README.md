@@ -92,7 +92,7 @@ pip install numpy Pillow
 
 ## 📖 Usage
 
-```bash id="x2m3zc"
+```bash
 python pinlock-img.py /path/to/file_or_directory
 ```
 
