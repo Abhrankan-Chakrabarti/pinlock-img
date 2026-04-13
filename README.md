@@ -100,7 +100,7 @@ python pinlock-img.py /path/to/file_or_directory
 
 ### Dry Run
 
-```bash id="x0l9r1"
+```bash
 python pinlock-img.py /path/to/files
 ```
 
