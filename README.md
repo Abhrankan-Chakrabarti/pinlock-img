@@ -18,10 +18,10 @@
 
 **pinlock-img** is a password-based image protection tool for PNG files.
 
-It combines deterministic encryption with strong authentication to ensure that:
-- Files cannot be silently corrupted  
-- Wrong passwords never damage data  
-- Tampering is always detected  
+It ensures:
+- No silent corruption  
+- Safe failure on wrong password  
+- Tamper detection via authentication  
 
 ---
 
@@ -35,39 +35,38 @@ It combines deterministic encryption with strong authentication to ensure that:
 ---
 
 ### 🧠 Dual-Key Architecture
-A single derived key is split into:
 
-- **XOR Seed (16 bytes)** → Generates deterministic noise stream  
-- **Authentication Key (16 bytes)** → Used for HMAC-SHA256  
+- **XOR Seed (16 bytes)** → deterministic noise stream  
+- **Authentication Key (16 bytes)** → HMAC-SHA256  
 
 ---
 
-### 🛡️ Authenticated Encryption (Encrypt-then-MAC)
+### 🛡️ Authenticated Encryption
 
-- Data is encrypted first  
-- HMAC-SHA256 tag is computed on encrypted bytes  
-- Tag stored in PNG metadata (`tEXt` → `pinlock_auth`)  
+Encrypt-then-MAC design:
+- Encrypt data  
+- Generate HMAC  
+- Store tag in PNG metadata (`pinlock_auth`)  
 
-Decryption only proceeds if authentication succeeds.
+Decryption only proceeds after successful verification.
 
 ---
 
 ## ⚙️ How It Works
 
 ### Encryption
-1. XOR transform applied to pixel data  
-2. HMAC tag generated  
-3. Tag embedded in PNG metadata  
-4. File renamed with `.lock` suffix  
+1. XOR transform applied  
+2. HMAC generated  
+3. Tag embedded in PNG  
+4. `.lock` suffix added  
 
 ---
 
 ### Decryption
-1. Extract stored HMAC  
-2. Recompute tag  
-3. Verify integrity  
-4. If valid → decrypt  
-5. If invalid → abort safely  
+1. Extract HMAC  
+2. Verify integrity  
+3. If valid → decrypt  
+4. If invalid → abort safely  
 
 ---
 
@@ -75,10 +74,9 @@ Decryption only proceeds if authentication succeeds.
 
 - 🔐 Password-based protection  
 - 🛡️ HMAC-SHA256 authentication  
-- 🔄 Encrypt / decrypt in-place  
-- 📂 Recursive batch processing  
-- 🧪 Dry-run mode (no changes)  
-- 💾 Atomic file operations (safe writes)  
+- 📂 Batch processing  
+- 🧪 Dry-run mode  
+- 💾 Atomic file writes  
 
 ---
 
@@ -94,9 +92,7 @@ pip install numpy Pillow
 
 ## 📖 Usage
 
-### Encrypt / Decrypt
-
-```bash
+```bash id="x2m3zc"
 python pinlock-img.py /path/to/file_or_directory
 ```
 
@@ -104,52 +100,48 @@ python pinlock-img.py /path/to/file_or_directory
 
 ### Dry Run
 
-```bash
+```bash id="x0l9r1"
 python pinlock-img.py /path/to/files
 ```
 
-Then select:
+Then:
 
-```
+```id="p1d8wa"
 Dry Run? (y/n): y
-```
-
----
-
-## 📊 Example Output
-
-```
-✅ Encrypted: image1.lock.png
-✅ Decrypted: secret.png
-❌ Wrong password (authentication failed)
-
-========================================
-📊 Batch Summary
-========================================
-Total Files Handled : 3
-Encrypted           : 1
-Decrypted           : 1
-========================================
-✨ Done!
 ```
 
 ---
 
 ## ⚠️ Security Notes
 
-* Strong authentication via HMAC-SHA256
-* Resistant to brute-force via PBKDF2
-* Prevents silent corruption and tampering
+* Strong authentication (HMAC-SHA256)
+* PBKDF2 protects against brute-force
 
 However:
 
-* Uses deterministic XOR-based transformation
-* Not equivalent to modern AEAD (e.g., AES-GCM)
-
-👉 Suitable for controlled vault-style use, not high-security cryptographic applications.
+* Uses deterministic XOR transformation
+* Not equivalent to AES-GCM or modern AEAD
 
 ---
 
 ## 📜 License
 
 MIT License © 2026 Fox Hackerz
+
+---
+
+## 🦊 About Fox Hackerz
+
+We build tools focused on:
+
+* Cybersecurity
+* Automation
+* Developer tools
+
+📌 GitHub: [https://github.com/foxhackerzdevs](https://github.com/foxhackerzdevs)
+
+---
+
+<p align="center">
+  <b>🦊 Join the pack. Build. Break. Secure.</b>
+</p>
